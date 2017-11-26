@@ -2,12 +2,14 @@
 
 gem "nokogiri"
 gem "terminal-table"
+gem "colorize"
 
 require "time"
 require "json"
 require "net/http"
 require "nokogiri"
 require "terminal-table"
+require "colorize"
 
 SCHEDULE_URL = "https://widgets.healcode.com/widgets/schedules/bd269397265.json"
 
@@ -61,4 +63,14 @@ sessions = doc.css("div.bw-session").map do |session|
   session_info
 end
 
-puts Terminal::Table.new(headings: sessions.first.keys, rows: sessions.map(&:values))
+puts Terminal::Table.new(
+  headings: sessions.first.keys,
+  rows: sessions.sort_by { |session| session.values_at(:place, :start) }.map do |s|
+    s[:availability] = s[:availability].colorize(:red) if s[:availability][/waitlist/i]
+    s[:start] = s[:start].strftime("%d %a, %H:%M%p").colorize(
+      String.colors.select { |c| c[/light/] }[s[:start].wday],
+    )
+
+    s.values
+  end,
+)
