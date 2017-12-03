@@ -65,11 +65,9 @@ class Mindbody
 end
 
 class CityRoad
-  def self.from_widget(url: SCHEDULE_URL)
-    response = Net::HTTP.get(URI(url))
+  def self.from_widget(response:, mindbody:)
     contents = JSON.parse(response).fetch("contents")
     widget = Nokogiri::HTML(contents)
-    mindbody = Mindbody.login
 
     new(widget, mindbody)
   end
@@ -169,7 +167,12 @@ def format_session_row(s)
   ]
 end
 
-city_road = CityRoad.from_widget(url: SCHEDULE_URL)
+response, mindbody = [
+  Thread.new { |t| Thread.current[:value] = Net::HTTP.get(URI(SCHEDULE_URL)) },
+  Thread.new { |t| Thread.current[:value] = Mindbody.login },
+].each(&:join).map { |t| t[:value] }
+
+city_road = CityRoad.from_widget(response: response, mindbody: mindbody)
 
 prompt = TTY::Prompt.new(enable_color: true, active_color: :cyan)
 locations = prompt.multi_select("Choose class location", city_road.locations)
