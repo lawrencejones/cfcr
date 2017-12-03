@@ -22,16 +22,17 @@ MINDBODY_URL = "https://widgets.healcode.com/sites/12715"
 CREDENTIALS = TOML.load(File.read(File.expand_path("~/.cfcr.toml")))
 
 class Mindbody
+  # Takes 2s
   def self.login
     agent = Mechanize.new
-    agent.get("#{MINDBODY_URL}/session/new") do |login_page|
-      login_page.form_with(action: /session/) do |form|
+    agent.get("#{MINDBODY_URL}/session/new", redirect: "/sites/12715/client/schedules") do |login_page|
+      schedule_page = login_page.form_with(action: /session/) do |form|
         form["mb_client_session[username]"] = CREDENTIALS["username"]
         form["mb_client_session[password]"] = CREDENTIALS["password"]
       end.submit
-    end
 
-    new(agent)
+      return new(agent).tap { |m| m.booked_classes(schedule_page) }
+    end
   end
 
   def initialize(agent, url: MINDBODY_URL, credentials: CREDENTIALS)
@@ -41,11 +42,11 @@ class Mindbody
 
   attr_reader :agent, :url
 
-  # List of booked class ids
-  def booked_classes
+  # List of booked class ids- optinally provide a handle to schedule_page
+  def booked_classes(schedule_page = nil)
     @booked_classes ||= begin
-      schedule = agent.get("#{url}/client/schedules")
-      schedule.css("a.item__cancel").map do |a|
+      schedule_page ||= agent.get("#{url}/client/schedules")
+      schedule_page.css("a.item__cancel").map do |a|
         a.attr("href").split("/").last if a.attr("href")
       end.compact
     end
