@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 
 gem "nokogiri"
-gem "terminal-table"
 gem "colorize"
 gem "mechanize"
 gem "tty-prompt"
@@ -12,12 +11,10 @@ require "json"
 require "toml"
 require "net/http"
 require "nokogiri"
-require "terminal-table"
 require "colorize"
 require "mechanize"
 require "tty-prompt"
 require "values"
-require "pry"
 
 SCHEDULE_URL = "https://widgets.healcode.com/widgets/schedules/bd269397265.json"
 MINDBODY_URL = "https://widgets.healcode.com/sites/12715"
