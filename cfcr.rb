@@ -5,6 +5,7 @@ gem "terminal-table"
 gem "colorize"
 gem "mechanize"
 gem "tty-prompt"
+gem "values"
 
 require "time"
 require "json"
@@ -15,6 +16,7 @@ require "terminal-table"
 require "colorize"
 require "mechanize"
 require "tty-prompt"
+require "values"
 require "pry"
 
 SCHEDULE_URL = "https://widgets.healcode.com/widgets/schedules/bd269397265.json"
@@ -65,6 +67,30 @@ class Mindbody
   end
 end
 
+class Session < Value.new(:id, :staff, :place, :signup, :start, :availability, :booked)
+  def self.tabulate(sessions, prefix: "  ", pad: 2)
+    rows = sessions.map(&:to_row)
+    widths = rows.each_with_object([]) do |row, ws|
+      row.each_with_index { |col, i| ws[i] = [ws[i] || 0, 1 + col.size / pad].max }
+    end
+
+    rows.map do |row|
+      prefix + row.zip(widths).map { |(col, width)| col.ljust(pad * width) }.join("\t")
+    end
+  end
+
+  def to_row
+    [
+      staff,
+      place,
+      start.strftime("%d %a, %H:%M%p").colorize(
+        String.colors.select { |c| c[/light/] }[start.wday],
+      ),
+      availability.colorize(availability[/waitlist/] ? :red : :reset),
+    ]
+  end
+end
+
 class CityRoad
   def self.from_widget(response:, mindbody:)
     contents = JSON.parse(response).fetch("contents")
@@ -89,16 +115,21 @@ class CityRoad
 
   def sessions(filter_locations=locations)
     @sessions.
-      select  { |session| filter_locations.include?(session[:place]) }.
-      sort_by { |session| [session[:place], session[:start]] }
+      map     { |session| session.with(booked: booked?(session)) }.
+      select  { |session| filter_locations.include?(session.place) }.
+      sort_by { |session| [session.place, session.start] }
   end
 
   def locations
-    @sessions.map { |session| session[:place] }.uniq
+    @sessions.map(&:place).uniq
   end
 
   def booked_classes
     @mindbody.booked_classes
+  end
+
+  def booked?(session)
+    @mindbody.booked_classes.include?(session.id)
   end
 
   private
@@ -110,6 +141,7 @@ class CityRoad
         staff: session.css(".bw-session__staff").text.strip,
         place: session.css(".bw-session__location").text.strip,
         signup: session.css(".bw-widget__cart_button > button").first&.attr("data-url"),
+        booked: false, # placeholder value
         start: Time.parse(
           session.css(".bw-session__time time.hc_starttime").attr("datetime").value,
         ),
@@ -117,11 +149,7 @@ class CityRoad
     end
 
     sessions.each { |session| session[:availability] = availability(session[:id]) }
-    sessions.each_with_object(@mindbody.booked_classes) do |session, booked|
-      session[:booked] = booked.include?(session[:id])
-    end
-
-    sessions.each(&:freeze)
+    sessions.map  { |session| Session.with(session) }
   end
 
   def extract_schedule_data
@@ -143,52 +171,59 @@ class CityRoad
   end
 end
 
-def tabulate_sessions(sessions, headings: %i[staff place start availability booked])
-  Terminal::Table.new(
-    headings: headings,
-    rows: sessions.sort_by { |session| session.values_at(:place, :start) }.map do |s|
-      s[:availability] = s[:availability].colorize(:red) if s[:availability][/waitlist/i]
-      s[:start] = s[:start].strftime("%d %a, %H:%M%p").colorize(
-        String.colors.select { |c| c[/light/] }[s[:start].wday],
-      )
+class Prompt < TTY::Prompt
+  def self.run(&block)
+    puts "Logging into mindbody..."
+    response, mindbody = [
+      Thread.new { |t| Thread.current[:value] = Net::HTTP.get(URI(SCHEDULE_URL)) },
+      Thread.new { |t| Thread.current[:value] = Mindbody.login },
+    ].each(&:join).map { |t| t[:value] }
 
-      s.select { |key, _| headings.include?(key) }.values
-    end,
-  )
-end
+    city_road = CityRoad.from_widget(response: response, mindbody: mindbody)
+    new(city_road, enable_color: true, active_color: :cyan).instance_eval(&block)
+    puts("Goodbye!")
+  end
 
-def format_session_row(s)
-  [
-    s[:staff],
-    s[:place],
-    s[:start].strftime("%d %a, %H:%M%p").colorize(
-      String.colors.select { |c| c[/light/] }[s[:start].wday],
-    ),
-    s[:availability].colorize(s[:availability][/waitlist/] ? :red : :reset),
-  ]
-end
+  def initialize(city_road, **kwargs)
+    @city_road = city_road
+    super(**kwargs)
+  end
 
-response, mindbody = [
-  Thread.new { |t| Thread.current[:value] = Net::HTTP.get(URI(SCHEDULE_URL)) },
-  Thread.new { |t| Thread.current[:value] = Mindbody.login },
-].each(&:join).map { |t| t[:value] }
+  attr_reader :city_road
 
-city_road = CityRoad.from_widget(response: response, mindbody: mindbody)
+  def display_booked_classes
+    puts "You are currently booked into:"
+    case city_road.sessions.select(&:booked)
+    when -> (ss) { ss.empty? } then puts "No sessions!"
+    else
+      puts Session.tabulate(city_road.sessions.select(&:booked)).join("\n")
+    end
+  end
 
-prompt = TTY::Prompt.new(enable_color: true, active_color: :cyan)
-locations = prompt.multi_select("Choose class location", city_road.locations)
+  def ask_for_bookings
+    locations = multi_select("Choose class location", city_road.locations)
+    sessions = city_road.sessions(locations)
 
-sessions = city_road.sessions(locations)
-book_ids = prompt.multi_select("Select sessions to book") do |menu|
-  # menu.default(*city_road.booked_classes)
-  sessions.each do |session|
-    menu.choice(format_session_row(session).join("\t"), session[:id])
+    multi_select("Select sessions to book", echo: false) do |menu|
+      sessions = city_road.sessions.reject(&:booked)
+      rows = Session.tabulate(sessions)
+      sessions.zip(rows).each { |(session, row)| menu.choice(row, session) }
+    end
   end
 end
 
-sessions.each do |session|
-  next unless (book_ids - city_road.booked_classes).include?(session[:id])
-  city_road.mindbody.add_to_cart(session[:signup])
-end
+Prompt.run do
+  loop do
+    display_booked_classes
+    break unless yes?("Book more classes?")
 
-city_road.mindbody.checkout
+    to_book = ask_for_bookings
+    to_book.each do |session|
+      puts("Adding session #{session.id} to cart...")
+      city_road.mindbody.add_to_cart(session.signup)
+    end
+
+    puts("Checking out...")
+    city_road.mindbody.checkout
+  end
+end
