@@ -218,12 +218,13 @@ Prompt.run do
     break unless yes?("Book more classes?")
 
     to_book = ask_for_bookings
+    print("Booking #{to_book.count} sessions...")
     to_book.each do |session|
-      puts("Adding session #{session.id} to cart...")
       city_road.mindbody.add_to_cart(session.signup)
+      city_road.mindbody.checkout
+      print(".")
     end
 
-    puts("Checking out...")
-    city_road.mindbody.checkout
+    puts(" ✓")
   end
 end
