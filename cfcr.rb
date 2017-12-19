@@ -133,6 +133,8 @@ class CityRoad
 
   def extract_sessions
     sessions = widget.css("div.bw-session").map do |session|
+      next unless session.css(".bw-session__time time.hc_starttime").any?
+
       {
         id: session.attr("data-bw-widget-mbo-class-id"),
         staff: session.css(".bw-session__staff").text.strip,
@@ -143,7 +145,7 @@ class CityRoad
           session.css(".bw-session__time time.hc_starttime").attr("datetime").value,
         ),
       }
-    end
+    end.compact
 
     sessions.each { |session| session[:availability] = availability(session[:id]) }
     sessions.map  { |session| Session.with(session) }
